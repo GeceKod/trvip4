@@ -198,7 +198,8 @@ def main():
             sys.exit(1)
 
         m3u_content = []
-        output_filename = "taraftarium24_kanallar.m3u8"
+        # KRİTİK DEĞİŞİKLİK: Çıktı dosya adını kanallar4.m3u8 olarak değiştir.
+        output_filename = "kanallar4.m3u8"
         print(f"\n📺 {len(channels)} kanal için M3U8 linkleri oluşturuluyor...")
         created = 0
 
@@ -219,9 +220,6 @@ def main():
             group_name = get_channel_group(channel_name)
 
             m3u8_link = f"{base_m3u8_url}{stream_id}.m3u8"
-
-            # Konsola yazdırmayı azaltalım, sadece başarılı/başarısız yazsın
-            # print(f"[{i}/{len(channels)}] {channel_name} (ID: {stream_id}, Grup: {group_name}) -> {m3u8_link}")
 
             m3u_content.append(f'#EXTINF:-1 tvg-name="{channel_name}" group-title="{group_name}",{channel_name}')
             m3u_content.append(m3u8_link)
