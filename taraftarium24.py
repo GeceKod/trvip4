@@ -4,14 +4,13 @@ import time
 from playwright.sync_api import sync_playwright, Error as PlaywrightError
 
 # ---------------- AYARLAR ----------------
-# Ana site adresi (Gerekirse güncelleyebilirsiniz)
+# Ana site adresi
 TARAFTARIUM_DOMAIN = "https://taraftarium24.xyz/"
 
 # Tarayıcı Kimliği
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-# KANALLAR LISTESI (ID ve İsim Eşleşmeleri)
-# Not: "androstreamlivebs1" ID'si kod içinde özel olarak yakalanıp "receptestt.m3u8"e çevrilecektir.
+# KANALLAR LISTESI
 CHANNELS = [
     {"id": "androstreamlivebs1", "name": "BeIN Sports 1", "group": "BeinSports"},
     {"id": "androstreamlivebs2", "name": "BeIN Sports 2", "group": "BeinSports"},
@@ -42,12 +41,9 @@ def find_base_url(page):
     """
     print(f"🔍 Base URL taranıyor...")
     
-    # 1. Yöntem: Sitedeki 'const baseurls = [...]' dizisinden rastgele bir tane seçmek yerine ilkini alalım.
     try:
         content = page.content()
-        
         # Regex ile 'andro.xxxx.xyz/checklist/' formatındaki linkleri ara
-        # Örnek: https://andro.1386503.xyz/checklist/
         pattern = re.compile(r'https://andro\.[0-9]+\.xyz/checklist/')
         match = pattern.search(content)
         
@@ -59,8 +55,7 @@ def find_base_url(page):
     except Exception as e:
         print(f"⚠️ Base URL taramasında hata: {e}")
 
-    # 2. Yöntem: Eğer bulamazsak, sizin verdiğiniz çalışan linki varsayılan olarak kullan.
-    # Bu domainler sık değişse de genelde checklist yapısı aynı kalır.
+    # Fallback URL
     FALLBACK_URL = "https://andro.1386503.xyz/checklist/"
     print(f"⚠️ Base URL bulunamadı, varsayılan kullanılıyor: {FALLBACK_URL}")
     return FALLBACK_URL
@@ -69,7 +64,7 @@ def main():
     print("🚀 Taraftarium24 M3U8 Oluşturucu Başlatılıyor...")
     
     with sync_playwright() as p:
-        # Tarayıcı başlatma ayarları (Headless: Arka planda çalışır)
+        # Tarayıcı başlatma ayarları
         browser_args = [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -83,18 +78,10 @@ def main():
         # 1. Adım: Siteye git ve Base URL'i öğren
         try:
             print(f"🌐 Siteye bağlanılıyor: {TARAFTARIUM_DOMAIN}")
-            # Önce ana sayfaya git
             page.goto(TARAFTARIUM_DOMAIN, timeout=30000, wait_until='domcontentloaded')
-            
-            # İçerikteki bir kanal iframe'ine veya sayfasına ulaşmaya çalışalım
-            # Genelde bir kanala tıklamak gerekir ama kaynak kodda varsa direkt alırız.
-            # Kodumuz direkt kaynak koddan baseurl çekmeye çalışacak.
-            
             base_m3u8_url = find_base_url(page)
-            
         except PlaywrightError as e:
             print(f"❌ Siteye bağlanırken hata oluştu: {e}")
-            # Hata olsa bile fallback URL ile devam etmeyi dene
             base_m3u8_url = "https://andro.1386503.xyz/checklist/"
 
         # 2. Adım: Linkleri Oluştur
@@ -108,26 +95,24 @@ def main():
             c_id = channel['id']
             c_group = channel['group']
             
-            # --- KRİTİK DÜZELTME BURADA ---
-            # Sitenin JavaScript mantığındaki özel durumu buraya ekledik.
+            # --- ÖZEL DURUM KONTROLÜ (BeIN Sports 1) ---
             if c_id == "androstreamlivebs1" or c_id == "facebooklivebs1":
                 final_filename = "receptestt.m3u8"
                 print(f"   -> [ÖZEL] {c_name} için dosya adı düzeltildi: {final_filename}")
             else:
                 final_filename = f"{c_id}.m3u8"
             
-            # Tam linki oluştur
             full_link = f"{base_m3u8_url}{final_filename}"
             
-            # M3U formatına ekle
             m3u_content.append(f'#EXTINF:-1 tvg-name="{c_name}" group-title="{c_group}",{c_name}')
             m3u_content.append(full_link)
             created_count += 1
 
         browser.close()
 
-        # 3. Adım: Dosyayı Kaydet
-        output_filename = "kanallar.m3u8"
+        # 3. Adım: Dosyayı Kaydet (İSİM DÜZELTİLDİ: kanallar4.m3u8)
+        output_filename = "kanallar4.m3u8"
+        
         if created_count > 0:
             header = f"""#EXTM3U
 #EXT-X-USER-AGENT:{USER_AGENT}
@@ -140,7 +125,6 @@ def main():
                 f.write("\n".join(m3u_content))
             
             print(f"\n✅ {created_count} kanal başarıyla '{output_filename}' dosyasına kaydedildi.")
-            print(f"📂 Dosya konumu: {output_filename}")
         else:
             print("\n❌ Hiçbir kanal oluşturulamadı.")
 
