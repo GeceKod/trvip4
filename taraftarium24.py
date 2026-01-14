@@ -13,8 +13,7 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/5.0 (KHTML, 
 
 def check_url_exists(url):
     """
-    Verilen URL'nin çalışıp çalışmadığını (200 OK) kontrol eder.
-    Bunu yaparken tüm dosyayı indirmez, sadece başlık (HEAD) ister.
+    Verilen URL'nin çalışıp çalışmadığını (200 OK) kontrol eder (HEAD isteği).
     """
     try:
         req = urllib.request.Request(
@@ -85,74 +84,109 @@ def extract_base_m3u8_url(page, event_url):
 
 def scrape_all_channels(page, base_m3u8_url):
     """
-    Kanalları tarar ve BeIN 1 için sunucu kontrolü yapar.
+    Hem maç listesini hem de menüdeki linkleri tarar.
     """
-    print(f"\n📡 Tüm kanallar {TARAFTARIUM_DOMAIN} adresinden otomatik taranıyor...")
+    print(f"\n📡 Tüm kanallar {TARAFTARIUM_DOMAIN} adresinden geniş kapsamlı taranıyor...")
     channels = []
-    
+    seen_ids = set() # Çifte kayıtları önlemek için ID takibi
+
     try:
         if page.url != TARAFTARIUM_DOMAIN:
             page.goto(TARAFTARIUM_DOMAIN, timeout=30000, wait_until='domcontentloaded')
         
-        mac_item_selector = ".mac[data-url]"
+        # --- YÖNTEM 1: MAÇ LİSTESİNDEKİ KANALLAR (.mac sınıfı) ---
+        print("-> 1. Aşama: Maç listesi taranıyor...")
+        mac_elements = page.query_selector_all(".mac[data-url]")
         
-        try:
-            page.wait_for_selector(mac_item_selector, timeout=15000)
-        except:
-            print("⚠️ Liste seçicisi zaman aşımına uğradı.")
+        raw_channels_data = []
 
-        channel_elements = page.query_selector_all(mac_item_selector)
-        print(f"-> {len(channel_elements)} adet ham kanal bulundu.")
-
-        seen_ids = set()
-
-        for element in channel_elements:
+        for el in mac_elements:
             try:
-                name_el = element.query_selector(".takimlar")
-                raw_name = name_el.inner_text().strip() if name_el else "İsimsiz"
-                
-                data_url = element.get_attribute('data-url')
-                stream_id = None
+                name_el = el.query_selector(".takimlar")
+                name = name_el.inner_text().strip() if name_el else "İsimsiz Maç"
+                data_url = el.get_attribute('data-url')
                 if data_url:
-                    parsed = urlparse(data_url)
-                    qs = parse_qs(parsed.query)
-                    stream_id = qs.get('id', [None])[0]
+                     raw_channels_data.append({"name": name, "url": data_url})
+            except: continue
 
-                if stream_id:
-                    # --- AKILLI DÜZELTME BÖLÜMÜ ---
-                    
-                    # 1. BeIN Sports 1 Kontrolü (Geleceğe Hazır Mod)
-                    if stream_id == "androstreamlivebs1" or stream_id == "facebooklivebs1":
-                        # Önce 'receptestt' dosyasını dene
-                        test_url = f"{base_m3u8_url}receptestt.m3u8"
-                        print(f"   ❓ BeIN 1 bulundu. 'receptestt' kontrol ediliyor...", end=" ")
-                        
+        # --- YÖNTEM 2: MENÜDEKİ VE DİĞER LİNKLER (ATV, A Spor vb.) ---
+        print("-> 2. Aşama: Menü ve genel linkler taranıyor...")
+        # İçinde 'channel.html?id=' geçen tüm linkleri bul
+        link_elements = page.query_selector_all("a[href*='channel.html?id=']")
+        
+        for el in link_elements:
+            try:
+                href = el.get_attribute('href')
+                name = el.inner_text().strip()
+                # İsmi çok uzunsa veya boşsa atla
+                if not name or len(name) > 50: continue
+                # Gereksiz boşlukları temizle
+                name = re.sub(r'\s+', ' ', name)
+                
+                if href:
+                    raw_channels_data.append({"name": name, "url": href})
+            except: continue
+
+        print(f"-> Toplam {len(raw_channels_data)} adet potansiyel kanal bulundu. İşleniyor...")
+
+        # --- ORTAK İŞLEME VE DÜZELTME DÖNGÜSÜ ---
+        for item in raw_channels_data:
+            url_str = item['url']
+            raw_name = item['name']
+            
+            # URL'den ID'yi çıkar
+            stream_id = None
+            try:
+                if '?' in url_str:
+                    # Tam URL ise parse et, değilse manuel split yap
+                    if url_str.startswith('http') or url_str.startswith('/'):
+                        # Urljoin ile tamir et ki urlparse çalışsın
+                        full_temp_url = urljoin(TARAFTARIUM_DOMAIN, url_str)
+                        parsed = urlparse(full_temp_url)
+                        stream_id = parse_qs(parsed.query).get('id', [None])[0]
+            except: pass
+
+            if stream_id:
+                # --- AKILLI DÜZELTME VE KONTROL ---
+                
+                # 1. BeIN Sports 1 (Receptestt Kontrolü)
+                if stream_id == "androstreamlivebs1" or stream_id == "facebooklivebs1":
+                    test_url = f"{base_m3u8_url}receptestt.m3u8"
+                    # Bu kontrolü her döngüde yapmamak için cache mantığı eklenebilir ama
+                    # set() kullandığımız için zaten sadece bir kez buraya girecek.
+                    if "receptestt.m3u8" not in seen_ids and "androstreamlivebs1.m3u8" not in seen_ids:
+                        print(f"   ❓ BeIN 1 bulundu. Sunucu kontrolü yapılıyor...", end=" ")
                         if check_url_exists(test_url):
-                            print("✅ AKTİF (Kullanılıyor)")
+                            print("✅ 'receptestt' AKTİF")
                             final_filename = "receptestt.m3u8"
                         else:
-                            print("❌ PASİF (Normale dönüldü)")
+                            print("❌ 'receptestt' PASİF (Orijinal ID kullanılıyor)")
                             final_filename = "androstreamlivebs1.m3u8"
-                    
-                    # 2. Max Kanalları (max -> bsm)
-                    elif "androstreamlivemax" in stream_id:
-                        final_id = stream_id.replace("max", "bsm")
-                        final_filename = f"{final_id}.m3u8"
-                    
                     else:
-                        final_filename = f"{stream_id}.m3u8"
+                        # Zaten işlendiyse atla
+                        continue
 
-                    if final_filename not in seen_ids:
-                        clean_name = raw_name.replace('CANLI', '').strip()
-                        channels.append({
-                            'name': clean_name,
-                            'filename': final_filename
-                        })
-                        seen_ids.add(final_filename)
-            except Exception:
-                continue
+                # 2. Max Kanalları (max -> bsm)
+                elif "androstreamlivemax" in stream_id:
+                    final_id = stream_id.replace("max", "bsm")
+                    final_filename = f"{final_id}.m3u8"
+                
+                # 3. Diğerleri (ATV, A Spor, TV8 vb. buraya düşecek)
+                else:
+                    final_filename = f"{stream_id}.m3u8"
 
-        print(f"✅ {len(channels)} adet benzersiz kanal işlendi.")
+                # Listeye Ekle (Benzersizlik Kontrolü)
+                if final_filename not in seen_ids:
+                    # İsimdeki "CANLI" vb. kelimeleri temizle
+                    clean_name = raw_name.replace('CANLI', '').strip()
+                    
+                    channels.append({
+                        'name': clean_name,
+                        'filename': final_filename
+                    })
+                    seen_ids.add(final_filename)
+
+        print(f"✅ {len(channels)} adet benzersiz kanal başarıyla listelendi.")
         return channels
 
     except Exception as e:
@@ -160,19 +194,21 @@ def scrape_all_channels(page, base_m3u8_url):
         return []
 
 def get_channel_group(channel_name):
-    name_lower = channel_name.lower()
-    if "bein" in name_lower: return "BeinSports"
-    if "s sport" in name_lower or "ssport" in name_lower: return "S Sports"
-    if "tivibu" in name_lower: return "Tivibu"
-    if "exxen" in name_lower: return "Exxen"
-    if "smart" in name_lower: return "Smart Spor"
-    if "nba" in name_lower: return "NBA"
-    if "trt" in name_lower: return "TRT"
-    return "Ulusal/Diğer"
+    n = channel_name.lower()
+    if "bein" in n: return "BeinSports"
+    if "s sport" in n or "ssport" in n: return "S Sports"
+    if "tivibu" in n: return "Tivibu"
+    if "exxen" in n: return "Exxen"
+    if "smart" in n: return "Smart Spor"
+    if "nba" in n: return "NBA"
+    if "trt" in n: return "TRT"
+    if any(x in n for x in ["atv", "a spor", "tv8", "kanald", "show", "startv", "foxtv", "nowtv", "tv 8"]): return "Ulusal Kanallar"
+    if "euro" in n: return "EuroSport"
+    return "Diğer"
 
 def main():
     with sync_playwright() as p:
-        print("🚀 Playwright ile Taraftarium24 Otomatik Botu (Akıllı Mod) Başlatılıyor...")
+        print("🚀 Playwright ile Taraftarium24 Full Botu Başlatılıyor...")
 
         browser_args = [
             '--no-sandbox',
@@ -193,7 +229,7 @@ def main():
             base_m3u8_url = "https://andro.1386503.xyz/checklist/"
             print(f"⚠️ Manuel Base URL: {base_m3u8_url}")
 
-        # 2. Kanalları Tara (Base URL'i de gönderiyoruz ki kontrol yapabilsin)
+        # 2. Tüm kanalları (Liste + Menü) tara
         channels = scrape_all_channels(page, base_m3u8_url)
 
         if not channels:
