@@ -52,7 +52,7 @@ def extract_base_m3u8_url(page, event_url):
     return fallback
 
 def scrape_all_channels(page, base_m3u8_url):
-    print(f"\n📡 Kanal listesi taranıyor ve Ayrıştırılıyor...")
+    print(f"\n📡 Kanal listesi taranıyor (Saat Bilgisi İle)...")
     channels = []
     seen_entries = set() 
 
@@ -78,11 +78,27 @@ def scrape_all_channels(page, base_m3u8_url):
                 raw_name = name_el.inner_text().strip() if name_el else "İsimsiz Kanal"
                 clean_name = raw_name.replace("CANLI", "").strip().split('\n')[0]
 
-                # 2. Lig/Kategori Bilgisini Çekme (YENİ ÖZELLİK)
+                # 2. Lig Bilgisi (Kategori İçin)
                 lig_el = el.query_selector(".lig")
                 lig_info = lig_el.inner_text().strip() if lig_el else ""
 
-                # 3. ID Çekme
+                # 3. Saat Bilgisi (YENİ EKLENDİ)
+                saat_el = el.query_selector(".saat")
+                saat_info = saat_el.inner_text().strip() if saat_el else ""
+
+                # Görünecek İsim Formatı Ayarlama
+                # Eğer 7/24 kanalı değilse saati ismin başına ekle
+                display_name = clean_name
+                if "7/24" not in lig_info and saat_info:
+                    # Saat "CANLI" değilse ve boş değilse ekle
+                    if saat_info != "CANLI":
+                        display_name = f"[{saat_info}] {clean_name}"
+                    else:
+                        # Zaten canlıysa [CANLI] etiketi ekleyebiliriz veya sade bırakabiliriz
+                        # Sitenin kendisi zaten CANLI badge'i koyuyor ama metin olarak da ekleyelim
+                        display_name = f"[CANLI] {clean_name}"
+
+                # 4. ID Çekme
                 data_url = el.get_attribute("data-url")
                 if not data_url: continue
                 
@@ -98,11 +114,9 @@ def scrape_all_channels(page, base_m3u8_url):
                             final_filename = "receptestt.m3u8"
                         else:
                             final_filename = "androstreamlivebs1.m3u8"
-
                     elif "androstreamlivemax" in stream_id:
                         new_id = stream_id.replace("max", "bsm")
                         final_filename = f"{new_id}.m3u8"
-                    
                     else:
                         final_filename = f"{stream_id}.m3u8"
 
@@ -111,9 +125,10 @@ def scrape_all_channels(page, base_m3u8_url):
 
                     if entry_signature not in seen_entries:
                         channels.append({
-                            "name": clean_name,
+                            "name": clean_name,       # Saf isim (Sıralama ve Grup için)
+                            "display_name": display_name, # Saat eklenmiş isim (Görünüm için)
                             "filename": final_filename,
-                            "league": lig_info # Lig bilgisini sakla
+                            "league": lig_info
                         })
                         seen_entries.add(entry_signature)
 
@@ -129,14 +144,12 @@ def scrape_all_channels(page, base_m3u8_url):
 
 def determine_group(channel_data):
     """
-    Kanalın kategorisini belirler:
-    - Eğer lig bilgisi '7/24' ise -> TV Kanalıdır (Spor, Ulusal vs. diye ayır)
-    - Değilse -> Canlı Maçtır (Lig adını kullan)
+    Kategori Belirleme
     """
     name = channel_data['name']
     league = channel_data['league']
 
-    # Kural 1: Lig bilgisi '7/24' ise bu bir TV kanalıdır
+    # 1. TV Kanalları
     if "7/24" in league:
         n = name.lower()
         if "bein" in n: return "BeinSports"
@@ -150,18 +163,15 @@ def determine_group(channel_data):
         if any(x in n for x in ["atv", "a spor", "tv8", "kanal d", "show", "star", "fox", "now", "a2", "teve2", "beyaz"]): return "Ulusal Kanallar"
         return "Diğer Kanallar"
     
-    # Kural 2: Lig bilgisi farklıysa bu bir MAÇTIR
-    # İstersek direkt lig adını kullanabiliriz (Örn: İtalya Serie A)
-    # Ya da hepsini "Canlı Maçlar" altına toplayabiliriz.
-    
+    # 2. Canlı Maçlar
     if league:
-        return f"Canlı Maçlar - {league}" # Örn: Canlı Maçlar - İtalya Serie A
+        return f"Canlı Maçlar - {league}"
     else:
         return "Canlı Maçlar"
 
 def main():
     with sync_playwright() as p:
-        print("🚀 Taraftarium24 Kategori Ayırıcı Bot Başlatılıyor...")
+        print("🚀 Taraftarium24 Bot (Saatli Versiyon) Başlatılıyor...")
 
         browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
         context = browser.new_context(user_agent=USER_AGENT)
@@ -183,19 +193,18 @@ def main():
         output_filename = "kanallar4.m3u8"
         content = ["#EXTM3U", f"#EXT-X-REFERER:{TARAFTARIUM_DOMAIN}"]
         
-        # Sıralama: Önce TV Kanalları (7/24 olanlar), Sonra Maçlar
-        # Bunu sağlamak için '7/24' içerenleri üste alıyoruz
+        # Sıralama: Önce TV Kanalları, Sonra Maçlar
         channels.sort(key=lambda x: ("7/24" not in x['league'], x['name']))
 
         print(f"\n📺 {len(channels)} yayın dosyaya yazılıyor...")
         
         for ch in channels:
             link = f"{base_m3u8_url}{ch['filename']}"
-            
-            # YENİ GRUPLAMA FONKSİYONU
             group = determine_group(ch)
             
-            content.append(f'#EXTINF:-1 tvg-name="{ch["name"]}" group-title="{group}",{ch["name"]}')
+            # tvg-name: Saf isim (Logoların otomatik eşleşmesi için daha iyidir)
+            # Display Name (Virgülden sonraki): Saatli isim
+            content.append(f'#EXTINF:-1 tvg-name="{ch["name"]}" group-title="{group}",{ch["display_name"]}')
             content.append(link)
 
         with open(output_filename, "w", encoding="utf-8") as f:
