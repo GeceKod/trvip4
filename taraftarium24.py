@@ -4,67 +4,98 @@ import time
 from playwright.sync_api import sync_playwright, Error as PlaywrightError
 
 # ---------------- AYARLAR ----------------
-# Ana site adresi
 TARAFTARIUM_DOMAIN = "https://taraftarium24.xyz/"
-
-# Tarayıcı Kimliği
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+OUTPUT_FILENAME = "kanallar4.m3u8"
 
-# KANALLAR LISTESI
-CHANNELS = [
-    {"id": "androstreamlivebs1", "name": "BeIN Sports 1", "group": "BeinSports"},
-    {"id": "androstreamlivebs2", "name": "BeIN Sports 2", "group": "BeinSports"},
-    {"id": "androstreamlivebs3", "name": "BeIN Sports 3", "group": "BeinSports"},
-    {"id": "androstreamlivebs4", "name": "BeIN Sports 4", "group": "BeinSports"},
-    {"id": "androstreamlivebs5", "name": "BeIN Sports 5", "group": "BeinSports"},
-    {"id": "androstreamlivemax1", "name": "BeIN Sports Max 1", "group": "BeinSports"},
-    {"id": "androstreamlivemax2", "name": "BeIN Sports Max 2", "group": "BeinSports"},
-    {"id": "androstreamlivess1", "name": "S Sport", "group": "S Sports"},
-    {"id": "androstreamlivess2", "name": "S Sport 2", "group": "S Sports"},
-    {"id": "androstreamlivetivibu1", "name": "Tivibu Spor 1", "group": "Tivibu"},
-    {"id": "androstreamlivetivibu2", "name": "Tivibu Spor 2", "group": "Tivibu"},
-    {"id": "androstreamlivetivibu3", "name": "Tivibu Spor 3", "group": "Tivibu"},
-    {"id": "androstreamlivenbatv", "name": "NBA TV", "group": "NBA"},
-    {"id": "androstreamliveexxen1", "name": "Exxen Spor 1", "group": "Exxen"},
-    {"id": "androstreamliveexxen2", "name": "Exxen Spor 2", "group": "Exxen"},
-    {"id": "androstreamliveexxen3", "name": "Exxen Spor 3", "group": "Exxen"},
-    {"id": "androstreamliveexxen4", "name": "Exxen Spor 4", "group": "Exxen"},
-    {"id": "androstreamlivesmartsbo", "name": "Smart Spor", "group": "Smart Spor"},
-    {"id": "androstreamlivetrtspor", "name": "TRT Spor", "group": "TRT"},
-    {"id": "androstreamlivetrtspor2", "name": "TRT Spor Yildiz", "group": "TRT"},
-]
+def get_channel_group(channel_name):
+    """Kanal ismine göre otomatik kategori belirler"""
+    name_lower = channel_name.lower()
+    if "bein" in name_lower:
+        return "BeinSports"
+    elif "s sport" in name_lower or "ssport" in name_lower:
+        return "S Sports"
+    elif "tivibu" in name_lower:
+        return "Tivibu"
+    elif "exxen" in name_lower:
+        return "Exxen"
+    elif "smart" in name_lower or "d-smart" in name_lower:
+        return "Smart Spor"
+    elif "nba" in name_lower:
+        return "NBA"
+    elif "trt" in name_lower:
+        return "TRT"
+    elif "eurosport" in name_lower:
+        return "EuroSport"
+    else:
+        return "Ulusal/Diğer"
+
+def scrape_channels(page):
+    """Sitedeki tüm kanal linklerini otomatik bulur"""
+    print("📡 Kanallar siteden otomatik taranıyor...")
+    channels = []
+    seen_ids = set() # Aynı kanalı iki kez eklememek için
+
+    try:
+        # Kanal linklerini taşıyan elementleri bul (href içinde 'id=' olanlar)
+        # Genellikle sidebar veya menüdedirler.
+        links = page.query_selector_all("a[href*='channel.html?id=']")
+        
+        print(f"   -> Toplam {len(links)} adet potansiyel kanal linki bulundu.")
+
+        for link in links:
+            href = link.get_attribute("href")
+            name = link.inner_text().strip()
+            
+            # Kanal isminde gereksiz boşluk veya yeni satır varsa temizle
+            name = re.sub(r'\s+', ' ', name)
+
+            # URL'den ID'yi çek
+            match = re.search(r'id=([a-zA-Z0-9_]+)', href)
+            if match and name:
+                c_id = match.group(1)
+                
+                # --- ID DÜZELTMELERİ (Sitedeki link eski, player yeni olabilir) ---
+                # Örnek: Site max1 der ama player bsm1 ister.
+                if "androstreamlivemax" in c_id:
+                    c_id = c_id.replace("max", "bsm")
+                
+                if c_id not in seen_ids:
+                    channels.append({"id": c_id, "name": name})
+                    seen_ids.add(c_id)
+    except Exception as e:
+        print(f"⚠️ Kanal tarama hatası: {e}")
+
+    # Eğer hiç kanal bulamazsa manuel listeyi devreye sokabiliriz (Opsiyonel)
+    if not channels:
+        print("❌ Otomatik tarama başarısız oldu veya kanal bulunamadı.")
+    else:
+        print(f"✅ {len(channels)} adet benzersiz kanal başarıyla listelendi.")
+        
+    return channels
 
 def find_base_url(page):
-    """
-    Sayfa kaynağındaki 'const baseurls' dizisini veya tekil 'baseurl' değişkenini bulur.
-    Bulamazsa çalışan bilinen bir adresi döndürür.
-    """
+    """Base URL bulma fonksiyonu"""
     print(f"🔍 Base URL taranıyor...")
-    
     try:
         content = page.content()
-        # Regex ile 'andro.xxxx.xyz/checklist/' formatındaki linkleri ara
         pattern = re.compile(r'https://andro\.[0-9]+\.xyz/checklist/')
         match = pattern.search(content)
-        
         if match:
             found_url = match.group(0)
             print(f"✅ Otomatik Base URL bulundu: {found_url}")
             return found_url
-            
     except Exception as e:
         print(f"⚠️ Base URL taramasında hata: {e}")
 
-    # Fallback URL
     FALLBACK_URL = "https://andro.1386503.xyz/checklist/"
     print(f"⚠️ Base URL bulunamadı, varsayılan kullanılıyor: {FALLBACK_URL}")
     return FALLBACK_URL
 
 def main():
-    print("🚀 Taraftarium24 M3U8 Oluşturucu Başlatılıyor...")
+    print("🚀 Taraftarium24 Otomatik M3U8 Botu Başlatılıyor...")
     
     with sync_playwright() as p:
-        # Tarayıcı başlatma ayarları
         browser_args = [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -75,30 +106,36 @@ def main():
         context = browser.new_context(user_agent=USER_AGENT, ignore_https_errors=True)
         page = context.new_page()
 
-        # 1. Adım: Siteye git ve Base URL'i öğren
         try:
             print(f"🌐 Siteye bağlanılıyor: {TARAFTARIUM_DOMAIN}")
             page.goto(TARAFTARIUM_DOMAIN, timeout=30000, wait_until='domcontentloaded')
+            
+            # 1. Base URL'i Bul
             base_m3u8_url = find_base_url(page)
-        except PlaywrightError as e:
-            print(f"❌ Siteye bağlanırken hata oluştu: {e}")
-            base_m3u8_url = "https://andro.1386503.xyz/checklist/"
+            
+            # 2. Kanalları Otomatik Çek
+            channel_list = scrape_channels(page)
 
-        # 2. Adım: Linkleri Oluştur
+        except PlaywrightError as e:
+            print(f"❌ Siteye bağlanırken kritik hata: {e}")
+            browser.close()
+            sys.exit(1)
+
+        # 3. M3U8 Dosyasını Oluştur
         m3u_content = []
         created_count = 0
         
-        print(f"\n📺 {len(CHANNELS)} kanal işleniyor...")
+        print(f"\n📺 Linkler işleniyor...")
 
-        for channel in CHANNELS:
+        for channel in channel_list:
             c_name = channel['name']
             c_id = channel['id']
-            c_group = channel['group']
+            c_group = get_channel_group(c_name)
             
-            # --- ÖZEL DURUM KONTROLÜ (BeIN Sports 1) ---
+            # --- ÖZEL DOSYA İSMİ KURALLARI ---
+            # BeIN Sports 1 için özel durum
             if c_id == "androstreamlivebs1" or c_id == "facebooklivebs1":
                 final_filename = "receptestt.m3u8"
-                print(f"   -> [ÖZEL] {c_name} için dosya adı düzeltildi: {final_filename}")
             else:
                 final_filename = f"{c_id}.m3u8"
             
@@ -110,21 +147,18 @@ def main():
 
         browser.close()
 
-        # 3. Adım: Dosyayı Kaydet (İSİM DÜZELTİLDİ: kanallar4.m3u8)
-        output_filename = "kanallar4.m3u8"
-        
         if created_count > 0:
             header = f"""#EXTM3U
 #EXT-X-USER-AGENT:{USER_AGENT}
 #EXT-X-REFERER:{TARAFTARIUM_DOMAIN}
 #EXT-X-ORIGIN:{TARAFTARIUM_DOMAIN.rstrip('/')}"""
             
-            with open(output_filename, "w", encoding="utf-8") as f:
+            with open(OUTPUT_FILENAME, "w", encoding="utf-8") as f:
                 f.write(header)
                 f.write("\n")
                 f.write("\n".join(m3u_content))
             
-            print(f"\n✅ {created_count} kanal başarıyla '{output_filename}' dosyasına kaydedildi.")
+            print(f"\n✅ {created_count} kanal başarıyla '{OUTPUT_FILENAME}' dosyasına kaydedildi.")
         else:
             print("\n❌ Hiçbir kanal oluşturulamadı.")
 
