@@ -7,8 +7,6 @@ from playwright.sync_api import sync_playwright
 
 # Taraftarium ana domain'i
 TARAFTARIUM_DOMAIN = "https://taraftarium24.xyz/"
-
-# Kullanılacak User-Agent
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/5.0 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 def check_url_exists(url):
@@ -23,10 +21,9 @@ def check_url_exists(url):
 def scrape_default_channel_info(page):
     print(f"\n📡 Varsayılan kanal bilgisi taranıyor...")
     try:
-        page.goto(TARAFTARIUM_DOMAIN, timeout=30000, wait_until='domcontentloaded')
+        page.goto(TARAFTARIUM_DOMAIN, timeout=40000, wait_until='domcontentloaded')
         time.sleep(3)
         
-        # Iframe'den ID yakalama
         iframe = page.query_selector("iframe#customIframe")
         if iframe:
             src = iframe.get_attribute('src')
@@ -56,10 +53,7 @@ def extract_base_m3u8_url(page, event_url):
     return fallback
 
 def scrape_all_channels(page, base_m3u8_url):
-    """
-    Sizin verdiğiniz HTML yapısına (div.mac[data-url]) göre tarama yapar.
-    """
-    print(f"\n📡 Kanal listesi '#hepsi' konteyneri içinden taranıyor...")
+    print(f"\n📡 Kanal listesi taranıyor (Auto-Scroll Aktif)...")
     channels = []
     seen_ids = set()
 
@@ -67,69 +61,57 @@ def scrape_all_channels(page, base_m3u8_url):
         if page.url != TARAFTARIUM_DOMAIN:
             page.goto(TARAFTARIUM_DOMAIN, timeout=30000, wait_until='domcontentloaded')
         
-        # Sayfanın tamamen yüklenmesi için bekle
-        time.sleep(3)
+        # --- ÖNEMLİ: SAYFAYI AŞAĞI KAYDIRMA (LAZY LOADING İÇİN) ---
+        print("⬇️  Sayfa aşağı kaydırılıyor (Tüm listenin yüklenmesi için)...")
+        for _ in range(7): # 7 kere aşağı scroll yap
+            page.mouse.wheel(0, 1500)
+            time.sleep(1) # Yüklenmesi için bekle
+        
+        # En tepeye geri çık (Garanti olsun)
+        page.mouse.wheel(0, -10000)
+        time.sleep(1)
 
-        # Sizin belirttiğiniz ID="hepsi" alanını bekle
-        try:
-            page.wait_for_selector("#hepsi", timeout=10000)
-            print("-> '#hepsi' konteyneri bulundu.")
-        except:
-            print("⚠️ '#hepsi' bulunamadı, genel tarama yapılıyor...")
-
-        # YENİ STRATEJİ: div.mac ve data-url özelliği olanları seç
-        # XPath karşılığı: //div[contains(@class, 'mac') and @data-url]
+        # HTML yapısına uygun genel seçici
+        # class="mac" olan ve data-url özelliği bulunan DIV'leri seç
         elements = page.query_selector_all("div.mac[data-url]")
         
-        print(f"-> Toplam {len(elements)} adet yayın bloğu bulundu.")
+        print(f"-> Toplam {len(elements)} adet yayın bulundu.")
 
         for el in elements:
             try:
-                # 1. İsim Çekme (.takimlar sınıfından)
+                # 1. İsim Çekme
                 name_el = el.query_selector(".takimlar")
                 raw_name = name_el.inner_text().strip() if name_el else "İsimsiz Kanal"
-                
-                # İsim temizliği (CANLI yazısını, saatleri vs. at)
-                clean_name = raw_name.replace("CANLI", "").strip()
-                # Yeni satır karakterlerini temizle
-                clean_name = clean_name.split('\n')[0].strip()
+                clean_name = raw_name.replace("CANLI", "").strip().split('\n')[0]
 
-                # 2. ID Çekme (data-url özelliğinden)
-                # Örn: /event.html?id=androstreamlivebs1
+                # 2. ID Çekme
                 data_url = el.get_attribute("data-url")
-                
                 if not data_url: continue
                 
-                # URL'den ID'yi ayrıştır
+                # data-url="/event.html?id=androstreamliveatv" -> ID'yi al
                 full_data_url = urljoin(TARAFTARIUM_DOMAIN, data_url)
                 parsed = urlparse(full_data_url)
                 stream_id = parse_qs(parsed.query).get('id', [None])[0]
 
                 if stream_id:
-                    # --- AKILLI ID DÜZELTMELERİ ---
-                    
-                    # BeIN Sports 1 (Fail-Safe)
+                    # DEBUG: ATV'yi görüp görmediğini kontrol edelim
+                    if "atv" in stream_id or "Atv" in clean_name:
+                        print(f"   👀 GÖZLEM: {clean_name} bulundu (ID: {stream_id})")
+
+                    # --- ID DÜZELTMELERİ ---
                     if stream_id == "androstreamlivebs1" or stream_id == "facebooklivebs1":
                         test_link = f"{base_m3u8_url}receptestt.m3u8"
-                        # Set içinde yoksa kontrol et
                         if "receptestt.m3u8" not in seen_ids:
-                            print(f"   ❓ {clean_name} kontrol ediliyor...", end=" ")
                             if check_url_exists(test_link):
-                                print("✅ receptestt AKTİF")
                                 final_filename = "receptestt.m3u8"
                             else:
-                                print("❌ Normal ID")
                                 final_filename = "androstreamlivebs1.m3u8"
-                        else:
-                            continue # Zaten eklendi
+                        else: continue 
 
-                    # Max Kanalları (max -> bsm)
                     elif "androstreamlivemax" in stream_id:
                         new_id = stream_id.replace("max", "bsm")
                         final_filename = f"{new_id}.m3u8"
-                        
-                    # Exxen Kanalları (Bazen exn bazen exxen gelir, olduğu gibi alıyoruz)
-                    # Sizin HTML'de 'androstreamliveexn1' görünüyor, bu doğru.
+                    
                     else:
                         final_filename = f"{stream_id}.m3u8"
 
@@ -141,8 +123,7 @@ def scrape_all_channels(page, base_m3u8_url):
                         })
                         seen_ids.add(final_filename)
 
-            except Exception as e:
-                # print(f"Hata: {e}") # Debug için açılabilir
+            except Exception:
                 continue
 
         print(f"✅ {len(channels)} adet benzersiz kanal başarıyla listelendi.")
@@ -167,17 +148,17 @@ def get_channel_group(channel_name):
 
 def main():
     with sync_playwright() as p:
-        print("🚀 Taraftarium24 HTML Analiz Botu Başlatılıyor...")
+        print("🚀 Taraftarium24 Scroll Botu Başlatılıyor...")
 
         browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
         context = browser.new_context(user_agent=USER_AGENT)
         page = context.new_page()
 
-        # 1. Base URL Ayarla
+        # 1. Base URL
         default_url, _ = scrape_default_channel_info(page)
         base_m3u8_url = extract_base_m3u8_url(page, default_url)
 
-        # 2. Kanalları HTML Yapısına Göre Tara
+        # 2. Tara (Scroll ile)
         channels = scrape_all_channels(page, base_m3u8_url)
 
         if not channels:
@@ -185,15 +166,15 @@ def main():
             browser.close()
             sys.exit(1)
 
-        # 3. M3U8 Yaz
+        # 3. Dosya Yaz
         output_filename = "kanallar4.m3u8"
         content = ["#EXTM3U", f"#EXT-X-REFERER:{TARAFTARIUM_DOMAIN}"]
         
+        # Ulusal kanalları öne alalım ki görebilesiniz
+        channels.sort(key=lambda x: (get_channel_group(x['name']) != "Ulusal", x['name']))
+
         print(f"\n📺 {len(channels)} kanal dosyaya yazılıyor...")
         
-        # İsim sıralaması yapalım (Okunabilirlik için)
-        channels.sort(key=lambda x: x['name'])
-
         for ch in channels:
             link = f"{base_m3u8_url}{ch['filename']}"
             group = get_channel_group(ch['name'])
